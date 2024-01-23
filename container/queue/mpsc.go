@@ -154,6 +154,8 @@ func (inst *mpscRing[T]) popHead() T {
 
 	pSlot := &inst.slot[inst.headIdx&inst.mod]
 	var iter uint32
+	// producer并不一定按照顺序写入，故此时的slot未必是有效的。
+	// 此处是否可以考虑向后寻找合法的slot，但如何处理headIdx?
 	for atomic.LoadInt64(&pSlot.flag) == 0 {
 		iter++
 		if iter > consumer_spin_cnt {
