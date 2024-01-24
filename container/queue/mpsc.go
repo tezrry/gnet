@@ -131,6 +131,7 @@ func (inst *mpscChain[T]) popHead() T {
 
 func (inst *mpscRing[T]) pushTail(v T) {
 	ti := atomic.AddInt64(&inst.tailIdx, 1) - 1
+	// 唯一可以判断队列是否已满的方式
 	for ti >= atomic.LoadInt64(&inst.headIdx)+inst.cap {
 		runtime.Gosched()
 	}
@@ -154,7 +155,7 @@ func (inst *mpscRing[T]) popHead() T {
 
 	pSlot := &inst.slot[inst.headIdx&inst.mod]
 	var iter uint32
-	// producer并不一定按照顺序写入，故此时的slot未必是有效的。
+	// producer并不一定顺序写入，故此时的slot未必是有效的。
 	// 此处是否可以考虑向后寻找合法的slot，但如何处理headIdx?
 	for atomic.LoadInt64(&pSlot.flag) == 0 {
 		iter++
