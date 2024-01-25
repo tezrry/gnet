@@ -9,34 +9,54 @@ import (
 	util_math "github.com/panjf2000/gnet/v2/util/math"
 )
 
+type spmcChunk[T any] struct {
+	ref     int64
+	next    *spmcChunk[T]
+	_       [CacheLineSize - unsafe.Sizeof((*int)(nil))]byte
+	headIdx int64
+	_       [CacheLineSize - 8]byte
+	tailIdx int64
+	slot    []T
+}
+
+func newChunk_spmc[T any](size int64) *spmcChunk[T] {
+	return &spmcChunk[T]{
+		ref:  size,
+		slot: make([]T, size),
+	}
+}
+
+func atomicLoadChunk_spmc[T any](addr **spmcChunk[T]) *spmcChunk[T] {
+	return (*spmcChunk[T])(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(addr))))
+}
+
+func atomicStoreChunk_spmc[T any](addr **spmcChunk[T], ptr *spmcChunk[T]) {
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(addr)), unsafe.Pointer(ptr))
+}
+
+func atomicSwapChunk_spmc[T any](addr **spmcChunk[T], new *spmcChunk[T]) (old *spmcChunk[T]) {
+	return (*spmcChunk[T])(atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(addr)), unsafe.Pointer(new)))
+}
+
 type spmcChain[T any] struct {
 	num       atomic.Int64
 	_         [CacheLineSize - unsafe.Sizeof(atomic.Int64{})]byte
-	headChunk *chunk64[T]
+	headChunk *spmcChunk[T]
 	_         [CacheLineSize - unsafe.Sizeof((*int)(nil))]byte
-	tailChunk *chunk64[T]
+	tailChunk *spmcChunk[T]
 	_         [CacheLineSize - unsafe.Sizeof((*int)(nil))]byte
-	memCache  *chunk64[T]
+	memCache  *spmcChunk[T]
 	_         [CacheLineSize - unsafe.Sizeof((*int)(nil))]byte
 	ch        chan struct{}
 	chunkSize int64
 }
 
-type spmcRing[T any] struct {
-	num     atomic.Int64
-	_       [CacheLineSize - unsafe.Sizeof(atomic.Int64{})]byte
-	headIdx int64
-	_       [CacheLineSize - 8]byte
-	tailIdx int64
-	_       [CacheLineSize - 8]byte
-	slot    []element[T]
-	cap     int64
-	mod     int64
-	ch      chan struct{}
-}
-
 func newChain_spmc[T any](size int64) *spmcChain[T] {
-	chunk := newChunk64[T](size)
+	if size < 0 {
+		panic(fmt.Errorf("invalid size %d", size))
+	}
+
+	chunk := newChunk_spmc[T](size)
 	return &spmcChain[T]{
 		ch:        make(chan struct{}, 1),
 		headChunk: chunk,
@@ -47,25 +67,21 @@ func newChain_spmc[T any](size int64) *spmcChain[T] {
 
 func (inst *spmcChain[T]) pushTail(v T) {
 	tailChunk := inst.tailChunk
-	pSlot := &tailChunk.slot[tailChunk.tailIdx]
-	pSlot.elt = v
-	pSlot.flag = 1
+	tailChunk.slot[tailChunk.tailIdx] = v
 
 	tailChunk.tailIdx++
 	if tailChunk.tailIdx == inst.chunkSize {
-		chunk := atomicSwapChunk64[T](&inst.memCache, nil)
+		chunk := atomicSwapChunk_spmc[T](&inst.memCache, nil)
 		if chunk == nil {
-			chunk = newChunk64[T](inst.chunkSize)
+			chunk = newChunk_spmc[T](inst.chunkSize)
 
 		} else {
 			chunk.tailIdx = 0
-			//atomic.StoreInt64(&chunk.headIdx, 0)
-			//chunk.headIdx = 0
 		}
 
 		tailChunk.next = chunk
 		// 让consumer可以读到最新的headChunk.next
-		atomicStoreChunk64[T](&inst.tailChunk, chunk)
+		atomicStoreChunk_spmc[T](&inst.tailChunk, chunk)
 	}
 
 	if inst.num.Add(1) < 1 {
@@ -79,31 +95,39 @@ func (inst *spmcChain[T]) popHead() T {
 	}
 
 RETRY:
-	headChunk := atomicLoadChunk64[T](&inst.headChunk)
-	hi := atomic.AddInt64(&headChunk.headIdx, 1)
+	headChunk := atomicLoadChunk_spmc[T](&inst.headChunk)
+	// 此时的headChunk很有可能已被其它consumer挂到了memCache
+	hi := atomic.AddInt64(&headChunk.headIdx, 1) // incr-1
 	if hi > inst.chunkSize {
-		headChunk = atomicLoadChunk64[T](&inst.headChunk.next)
 		goto RETRY
 	}
 
-	pSlot := &headChunk.slot[hi-1]
-	//if atomic.LoadInt64(&pSlot.flag) == 0 {
-	//	goto RETRY
-	//}
+	v := headChunk.slot[hi-1]
+	if atomic.AddInt64(&headChunk.ref, -1) == 0 {
+		chunk := atomicLoadChunk_spmc(&headChunk.next)
+		chunk.headIdx = 0
+		chunk.ref = inst.chunkSize
 
-	v := pSlot.elt
-	pSlot.flag = 0
-	//atomic.StoreInt64(&pSlot.flag, 0)
-
-	//if hi == inst.chunkSize {
-	//	chunk := atomicLoadChunk64(&headChunk.next)
-	//	headChunk.next = nil
-	//	atomic.StoreInt64(&headChunk.headIdx, 0)
-	//	atomicStoreChunk64[T](&inst.headChunk, chunk)
-	//	atomicSwapChunk64[T](&inst.memCache, headChunk)
-	//}
+		// 此时不重置headIdx和ref，避免和incr-1冲突
+		headChunk.next = nil
+		atomicStoreChunk_spmc[T](&inst.headChunk, chunk)
+		atomicSwapChunk_spmc[T](&inst.memCache, headChunk)
+	}
 
 	return v
+}
+
+type spmcRing[T any] struct {
+	num     atomic.Int64
+	_       [CacheLineSize - unsafe.Sizeof(atomic.Int64{})]byte
+	headIdx int64
+	_       [CacheLineSize - 8]byte
+	tailIdx int64
+	_       [CacheLineSize - 8]byte
+	slot    []element[T]
+	cap     int64
+	mod     int64
+	ch      chan struct{}
 }
 
 func newRing_spmc[T any](size int64) *spmcRing[T] {

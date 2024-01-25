@@ -19,7 +19,7 @@ func (lk *SpinLock) Lock() {
 			r = 30
 		}
 		//r := uint32(1000000)
-		link.Procyield(r)
+		link.ProcYield(r)
 		//println(time.Now().Unix())
 	}
 	//backoff := 1

@@ -10,8 +10,8 @@ import (
 )
 
 func Benchmark_spmcChain_race(b *testing.B) {
-	nConsumer := 2
-	num := 1024000
+	nConsumer := 4
+	num := 1024 * 1024
 	capacity := int64(256)
 
 	benchmark_spmcChain(b, nConsumer, num, capacity)
@@ -19,10 +19,18 @@ func Benchmark_spmcChain_race(b *testing.B) {
 
 func Benchmark_spmcRing_race(b *testing.B) {
 	nConsumer := 4
-	num := 1024000
+	num := 1024 * 1024
 	capacity := int64(256)
 
 	benchmark_spmcRing(b, nConsumer, num, capacity)
+}
+
+func Benchmark_spmcChain_16_1024(b *testing.B) {
+	nConsumer := 16
+	num := 1024 * 1024
+	capacity := int64(1024)
+
+	benchmark_spmcChain(b, nConsumer, num, capacity)
 }
 
 func Benchmark_spmcRing_16_1024(b *testing.B) {
@@ -35,10 +43,23 @@ func Benchmark_spmcRing_16_1024(b *testing.B) {
 
 func Benchmark_spmcChannel_16_1024(b *testing.B) {
 	nConsumer := 16
-	num := 1024 * 1020
+	num := 1024 * 1024
 	capacity := 1024
 
 	benchmark_spmcChannel(b, nConsumer, num, capacity)
+}
+
+func Benchmark_spmcChainConsumer(b *testing.B) {
+	capacity := int64(1024 * 1024)
+	nConsumer, num := 1, int(capacity)
+	for nConsumer <= num {
+		name := fmt.Sprintf("%d", nConsumer)
+		b.Run(name, func(b *testing.B) {
+			benchmark_spmcChain(b, nConsumer, num, capacity)
+		})
+
+		nConsumer <<= 1
+	}
 }
 
 func Benchmark_spmcRingConsumer(b *testing.B) {
@@ -51,6 +72,19 @@ func Benchmark_spmcRingConsumer(b *testing.B) {
 		})
 
 		nConsumer <<= 1
+	}
+}
+
+func Benchmark_spmcChainCapacity(b *testing.B) {
+	capacity := int64(1)
+	nConsumer, num := 16, 1024*1024
+	for capacity <= int64(num) {
+		name := fmt.Sprintf("%d", capacity)
+		b.Run(name, func(b *testing.B) {
+			benchmark_spmcRing(b, nConsumer, num, capacity)
+		})
+
+		capacity <<= 1
 	}
 }
 

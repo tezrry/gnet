@@ -1,25 +1,23 @@
 package queue
 
 import (
-	"math"
 	"sync/atomic"
 	"unsafe"
 )
 
 const CacheLineSize = 128
-const MaxCapacity int64 = math.MaxInt64 - 1
-const cacheLineSize uintptr = 128
+const (
+	MaskLittle32 = uint64((1 << 32) - 1)
+	MaskBig32    = ^MaskLittle32
+)
 
 type chunk64[T any] struct {
-	slot []element[T]
-	_    [128 - unsafe.Sizeof([]byte{})]byte
-	//prev    *chunk64[T]
-	//_       [120]byte
 	next    *chunk64[T]
-	_       [120]byte
+	_       [CacheLineSize - unsafe.Sizeof((*int)(nil))]byte
 	headIdx int64
-	_       [120]byte
+	_       [CacheLineSize - 8]byte
 	tailIdx int64
+	slot    []element[T]
 }
 
 type element[T any] struct {
@@ -33,13 +31,6 @@ type element[T any] struct {
 //	element[T]
 //	pad [cacheLineSize - unsafe.Sizeof(element[T]{})%cacheLineSize]byte
 //}
-
-type ring[T any] struct {
-	head uint32
-	tail uint32
-	mod  uint32
-	slot []element[T]
-}
 
 func newChunk64[T any](size int64) *chunk64[T] {
 	return &chunk64[T]{slot: make([]element[T], size)}

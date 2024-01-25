@@ -40,6 +40,10 @@ type mpscRing[T any] struct {
 }
 
 func newChain_mpsc[T any](size int64) *mpscChain[T] {
+	if size < 0 {
+		panic(fmt.Errorf("size MUST greater than 0, got %d", size))
+	}
+
 	chunk := newChunk64[T](size)
 	return &mpscChain[T]{
 		ch:        make(chan struct{}, 1),
