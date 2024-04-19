@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux || freebsd || dragonfly || darwin
+//go:build linux || darwin
 
 package socket
 
@@ -26,8 +26,8 @@ import (
 )
 
 type Option struct {
-	SetSockOpt func(int, int) error
-	Opt        int
+	Call  func(int, int) error
+	Param int
 }
 
 // SetNoDelay controls whether the operating system should delay

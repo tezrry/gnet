@@ -18,6 +18,7 @@ package socket
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -25,6 +26,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func Socket(family, soType, proto int) (int, error) {
+	return unix.Socket(family, soType|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, proto)
+}
+
+func SetKeepAlivePeriod(fd, secs int) error {
+	if secs <= 0 {
+		return fmt.Errorf("invalid time duration")
+	}
+	if err := os.NewSyscallError("setsockopt", unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1)); err != nil {
+		return err
+	}
+	if err := os.NewSyscallError("setsockopt", unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_KEEPINTVL, secs)); err != nil {
+		return err
+	}
+	return os.NewSyscallError("setsockopt", unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_KEEPIDLE, secs))
+}
 func maxListenerBacklog() int {
 	fd, err := os.Open("/proc/sys/net/core/somaxconn")
 	if err != nil {

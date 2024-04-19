@@ -6,8 +6,8 @@ import (
 	"os"
 	"runtime"
 	"syscall"
+	"unsafe"
 
-	"github.com/panjf2000/gnet/v2/internal/queue"
 	"golang.org/x/sys/unix"
 )
 
@@ -30,10 +30,8 @@ const (
 )
 
 type Poller struct {
-	fd              int
-	wakeup          int32
-	taskQueue       queue.AsyncTaskQueue // queue with low priority
-	urgentTaskQueue queue.AsyncTaskQueue // queue with high priority
+	efd    int
+	wakeup int32
 }
 
 var initEvt = []syscall.Kevent_t{{
@@ -51,11 +49,11 @@ var note = []syscall.Kevent_t{{
 func NewPoller() (*Poller, error) {
 	poller := new(Poller)
 	var err error
-	if poller.fd, err = syscall.Kqueue(); err != nil {
+	if poller.efd, err = syscall.Kqueue(); err != nil {
 		return nil, os.NewSyscallError("kqueue", err)
 	}
 
-	if _, err = syscall.Kevent(poller.fd, initEvt, nil, nil); err != nil {
+	if _, err = syscall.Kevent(poller.efd, initEvt, nil, nil); err != nil {
 		_ = poller.Close()
 		return nil, os.NewSyscallError("kevent add|clear", err)
 	}
@@ -68,7 +66,7 @@ func (p *Poller) Start() error {
 	var ts syscall.Timespec
 	var tsp *syscall.Timespec
 	for {
-		n, err := syscall.Kevent(p.fd, nil, evts, tsp)
+		n, err := syscall.Kevent(p.efd, nil, evts, tsp)
 		if n == 0 || (n < 0 && err == syscall.EINTR) {
 			tsp = nil
 			runtime.Gosched()
@@ -105,7 +103,18 @@ func (p *Poller) Start() error {
 }
 
 func (p *Poller) Close() error {
-	return os.NewSyscallError("close", unix.Close(p.fd))
+	return os.NewSyscallError("close", unix.Close(p.efd))
+}
+
+// AddRead registers the given file-descriptor with readable event to the poller.
+func (p *Poller) AddRead(pa *PollAttachment) error {
+	var evs [1]unix.Kevent_t
+	evs[0].Ident = uint64(pa.FD)
+	evs[0].Flags = unix.EV_ADD
+	evs[0].Filter = unix.EVFILT_READ
+	evs[0].Udata = (*byte)(unsafe.Pointer(pa))
+	_, err := unix.Kevent(p.efd, evs[:], nil, nil)
+	return os.NewSyscallError("kevent add", err)
 }
 
 //// UrgentTrigger puts task into urgentAsyncTaskQueue and wakes up the poller which is waiting for network-events,
@@ -154,16 +163,7 @@ func (p *Poller) Close() error {
 //	return os.NewSyscallError("kevent add", err)
 //}
 //
-//// AddRead registers the given file-descriptor with readable event to the poller.
-//func (p *Poller) AddRead(pa *PollAttachment) error {
-//	var evs [1]unix.Kevent_t
-//	evs[0].Ident = uint64(pa.FD)
-//	evs[0].Flags = unix.EV_ADD
-//	evs[0].Filter = unix.EVFILT_READ
-//	evs[0].Udata = (*byte)(unsafe.Pointer(pa))
-//	_, err := unix.Kevent(p.fd, evs[:], nil, nil)
-//	return os.NewSyscallError("kevent add", err)
-//}
+
 //
 //// AddWrite registers the given file-descriptor with writable event to the poller.
 //func (p *Poller) AddWrite(pa *PollAttachment) error {

@@ -13,11 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux || freebsd || dragonfly || darwin
+//go:build linux || darwin
 
 package socket
 
 import (
+	"errors"
 	"net"
 	"os"
 
@@ -58,7 +59,8 @@ func TCPSocket(addr *net.TCPAddr, passive bool, sockOpts ...Option) (fd int, err
 	defer func() {
 		// ignore EINPROGRESS for non-blocking socket connect, should be processed by caller
 		if err != nil {
-			if err, ok := err.(*os.SyscallError); ok && err.Err == unix.EINPROGRESS {
+			var err *os.SyscallError
+			if errors.As(err, &err) && errors.Is(unix.EINPROGRESS, err.Err) {
 				return
 			}
 			_ = unix.Close(fd)
@@ -72,7 +74,7 @@ func TCPSocket(addr *net.TCPAddr, passive bool, sockOpts ...Option) (fd int, err
 	}
 
 	for _, sockOpt := range sockOpts {
-		if err = sockOpt.SetSockOpt(fd, sockOpt.Opt); err != nil {
+		if err = sockOpt.Call(fd, sockOpt.Param); err != nil {
 			return
 		}
 	}

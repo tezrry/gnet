@@ -56,3 +56,26 @@ func SetKeepAlivePeriod(fd, secs int) error {
 	}
 	return os.NewSyscallError("setsockopt", unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, secs))
 }
+
+func maxListenerBacklog() int {
+	var (
+		n   uint32
+		err error
+	)
+	switch runtime.GOOS {
+	case "darwin":
+		n, err = unix.SysctlUint32("kern.ipc.somaxconn")
+	case "freebsd":
+		n, err = unix.SysctlUint32("kern.ipc.soacceptqueue")
+	}
+	if n == 0 || err != nil {
+		return unix.SOMAXCONN
+	}
+	// FreeBSD stores the backlog in an uint16, as does Linux.
+	// Assume the other BSDs do too. Truncate number to avoid wrapping.
+	// See issue 5030.
+	if n > 1<<16-1 {
+		n = 1<<16 - 1
+	}
+	return int(n)
+}

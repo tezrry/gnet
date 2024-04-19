@@ -26,23 +26,29 @@ func CreateService(proto string, config ...ConfigFunc) (*Service, error) {
 
 	inst := &Service{
 		config: Config{
-			Concurrency:         0,
+			ReactorNum:          runtime.NumCPU(),
 			SingleThreadHandler: false,
 			TCPKeepAlive:        0,
 			TCPNoDelay:          false,
 			SocketRecvBuffer:    0,
 			SocketSendBuffer:    0,
 		},
-		network: network,
-		netAddr: addr,
 	}
 
 	for _, cf := range config {
 		cf(&inst.config)
 	}
 
-	if inst.config.Concurrency == 0 {
-		inst.config.Concurrency = runtime.NumCPU()
+	if inst.config.ReactorNum < 1 {
+		return nil, fmt.Errorf("ReactorNum MUST be greater than 0, got %d", inst.config.ReactorNum)
+	}
+
+	inst.reactor = make([]*_Reactor, inst.config.ReactorNum)
+	for i := 0; i < inst.config.ReactorNum; i++ {
+		inst.reactor[i], err = newReactor(network, addr, &inst.config)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return inst, nil
@@ -95,22 +101,18 @@ func parseProtocol(protocol string) (Network, net.Addr, error) {
 }
 
 type Service struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	chErr   chan error
-	config  Config
-	network Network
-	netAddr net.Addr
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	chErr  chan error
+	config Config
+
 	reactor []*_Reactor
 }
 
-func (inst *Service) Run(ctx context.Context) chan error {
+func (inst *Service) Run(ctx context.Context) <-chan error {
 	inst.ctx, inst.cancel = context.WithCancel(ctx)
 	inst.chErr = make(chan error, inst.config.ReactorNum)
-	for i := 0; i < inst.config.ReactorNum; i++ {
-
-	}
 
 	return inst.chErr
 }

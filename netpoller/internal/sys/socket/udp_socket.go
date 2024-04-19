@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux || freebsd || dragonfly || darwin
+//go:build linux || darwin
 
 package socket
 
@@ -117,7 +117,7 @@ func udpSocket(proto, addr string, connect bool, sockOpts ...Option) (fd int, ne
 	}
 
 	for _, sockOpt := range sockOpts {
-		if err = sockOpt.SetSockOpt(fd, sockOpt.Opt); err != nil {
+		if err = sockOpt.Call(fd, sockOpt.Param); err != nil {
 			return
 		}
 	}
