@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Andy Pan
+// Copyright (c) 2021 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build freebsd || dragonfly || darwin
-// +build freebsd dragonfly darwin
+//go:build freebsd || dragonfly || netbsd || openbsd || darwin
+// +build freebsd dragonfly netbsd openbsd darwin
 
 package io
 
@@ -33,7 +33,7 @@ func Writev(fd int, bs [][]byte) (int, error) {
 		return 0, nil
 	}
 	iov := bytes2iovec(bs)
-	n, _, err := unix.RawSyscall(unix.SYS_WRITEV, uintptr(fd), uintptr(unsafe.Pointer(&iov[0])), uintptr(len(iov)))
+	n, _, err := unix.RawSyscall(unix.SYS_WRITEV, uintptr(fd), uintptr(unsafe.Pointer(&iov[0])), uintptr(len(iov))) //nolint:staticcheck
 	if err != 0 {
 		return int(n), err
 	}
@@ -51,7 +51,7 @@ func Readv(fd int, bs [][]byte) (int, error) {
 	}
 	iov := bytes2iovec(bs)
 	// syscall
-	n, _, err := unix.RawSyscall(unix.SYS_READV, uintptr(fd), uintptr(unsafe.Pointer(&iov[0])), uintptr(len(iov)))
+	n, _, err := unix.RawSyscall(unix.SYS_READV, uintptr(fd), uintptr(unsafe.Pointer(&iov[0])), uintptr(len(iov))) //nolint:staticcheck
 	if err != 0 {
 		return int(n), err
 	}

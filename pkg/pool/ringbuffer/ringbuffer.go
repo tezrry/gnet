@@ -1,4 +1,4 @@
-// Copyright (c) 2019 Andy Pan
+// Copyright (c) 2019 The Gnet Authors. All rights reserved.
 // Copyright (c) 2016 Aliaksandr Valialkin, VertaMedia
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +19,7 @@
 package ringbuffer
 
 import (
+	"math/bits"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -160,9 +161,8 @@ func index(n int) int {
 	n--
 	n >>= minBitSize
 	idx := 0
-	for n > 0 {
-		n >>= 1
-		idx++
+	if n > 0 {
+		idx = bits.Len(uint(n))
 	}
 	if idx >= steps {
 		idx = steps - 1

@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Andy Pan
+// Copyright (c) 2021 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -218,7 +218,7 @@ func (llb *Buffer) Reset() {
 	llb.tail = nil
 	llb.size = 0
 	llb.bytes = 0
-	llb.bs = llb.bs[:0]
+	llb.bs = nil
 }
 
 // pop returns and removes the head of l. If l is empty, it returns nil.

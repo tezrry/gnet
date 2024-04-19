@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Andy Pan
+// Copyright (c) 2021 The Gnet Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux || freebsd || dragonfly || darwin
-// +build linux freebsd dragonfly darwin
+//go:build linux || freebsd || dragonfly || netbsd || openbsd || darwin
+// +build linux freebsd dragonfly netbsd openbsd darwin
 
 package gnet
 
@@ -25,55 +25,67 @@ import (
 	"sync"
 	"syscall"
 
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 
+	"github.com/panjf2000/gnet/v2/internal/math"
 	"github.com/panjf2000/gnet/v2/internal/netpoll"
+	"github.com/panjf2000/gnet/v2/internal/queue"
 	"github.com/panjf2000/gnet/v2/internal/socket"
-	"github.com/panjf2000/gnet/v2/internal/toolkit"
 	"github.com/panjf2000/gnet/v2/pkg/buffer/ring"
-	gerrors "github.com/panjf2000/gnet/v2/pkg/errors"
+	errorx "github.com/panjf2000/gnet/v2/pkg/errors"
 	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
 
 // Client of gnet.
 type Client struct {
-	opts     *Options
-	el       *eventloop
-	logFlush func() error
+	opts *Options
+	el   *eventloop
 }
 
 // NewClient creates an instance of Client.
-func NewClient(eventHandler EventHandler, opts ...Option) (cli *Client, err error) {
+func NewClient(eh EventHandler, opts ...Option) (cli *Client, err error) {
 	options := loadOptions(opts...)
 	cli = new(Client)
 	cli.opts = options
-	var logger logging.Logger
-	if options.LogPath != "" {
-		if logger, cli.logFlush, err = logging.CreateLoggerAsLocalFile(options.LogPath, options.LogLevel); err != nil {
-			return
-		}
-	} else {
-		logger = logging.GetDefaultLogger()
-	}
+
+	logger, logFlusher := logging.GetDefaultLogger(), logging.GetDefaultFlusher()
 	if options.Logger == nil {
+		if options.LogPath != "" {
+			logger, logFlusher, _ = logging.CreateLoggerAsLocalFile(options.LogPath, options.LogLevel)
+		}
 		options.Logger = logger
+	} else {
+		logger = options.Logger
+		logFlusher = nil
 	}
+	logging.SetDefaultLoggerAndFlusher(logger, logFlusher)
+
 	var p *netpoll.Poller
 	if p, err = netpoll.OpenPoller(); err != nil {
 		return
 	}
-	eng := new(engine)
-	eng.opts = options
-	eng.eventHandler = eventHandler
-	eng.ln = &listener{network: "udp"}
-	eng.cond = sync.NewCond(&sync.Mutex{})
-	if options.Ticker {
-		eng.tickerCtx, eng.cancelTicker = context.WithCancel(context.Background())
+
+	shutdownCtx, shutdown := context.WithCancel(context.Background())
+	eng := engine{
+		ln:           &listener{},
+		opts:         options,
+		eventHandler: eh,
+		workerPool: struct {
+			*errgroup.Group
+			shutdownCtx context.Context
+			shutdown    context.CancelFunc
+			once        sync.Once
+		}{&errgroup.Group{}, shutdownCtx, shutdown, sync.Once{}},
 	}
-	el := new(eventloop)
-	el.ln = eng.ln
-	el.engine = eng
-	el.poller = p
+	if options.Ticker {
+		eng.ticker.ctx, eng.ticker.cancel = context.WithCancel(context.Background())
+	}
+	el := eventloop{
+		ln:     eng.ln,
+		engine: &eng,
+		poller: p,
+	}
 
 	rbc := options.ReadBufferCap
 	switch {
@@ -82,7 +94,7 @@ func NewClient(eventHandler EventHandler, opts ...Option) (cli *Client, err erro
 	case rbc <= ring.DefaultBufferSize:
 		options.ReadBufferCap = ring.DefaultBufferSize
 	default:
-		options.ReadBufferCap = toolkit.CeilToPowerOfTwo(rbc)
+		options.ReadBufferCap = math.CeilToPowerOfTwo(rbc)
 	}
 	wbc := options.WriteBufferCap
 	switch {
@@ -91,60 +103,63 @@ func NewClient(eventHandler EventHandler, opts ...Option) (cli *Client, err erro
 	case wbc <= ring.DefaultBufferSize:
 		options.WriteBufferCap = ring.DefaultBufferSize
 	default:
-		options.WriteBufferCap = toolkit.CeilToPowerOfTwo(wbc)
+		options.WriteBufferCap = math.CeilToPowerOfTwo(wbc)
 	}
 
 	el.buffer = make([]byte, options.ReadBufferCap)
-	el.udpSockets = make(map[int]*conn)
-	el.connections = make(map[int]*conn)
-	el.eventHandler = eventHandler
-	cli.el = el
+	el.connections.init()
+	el.eventHandler = eh
+	cli.el = &el
 	return
 }
 
 // Start starts the client event-loop, handing IO events.
 func (cli *Client) Start() error {
 	cli.el.eventHandler.OnBoot(Engine{})
-	cli.el.engine.wg.Add(1)
-	go func() {
-		cli.el.run(cli.opts.LockOSThread)
-		cli.el.engine.wg.Done()
-	}()
+	cli.el.engine.workerPool.Go(cli.el.run)
 	// Start the ticker.
 	if cli.opts.Ticker {
-		go cli.el.ticker(cli.el.engine.tickerCtx)
+		go cli.el.ticker(cli.el.engine.ticker.ctx)
 	}
+	logging.Debugf("default logging level is %s", logging.LogLevel())
 	return nil
 }
 
 // Stop stops the client event-loop.
 func (cli *Client) Stop() (err error) {
-	logging.Error(cli.el.poller.UrgentTrigger(func(_ interface{}) error { return gerrors.ErrEngineShutdown }, nil))
-	cli.el.engine.wg.Wait()
-	logging.Error(cli.el.poller.Close())
-	cli.el.eventHandler.OnShutdown(Engine{})
+	logging.Error(cli.el.poller.Trigger(queue.HighPriority, func(_ interface{}) error { return errorx.ErrEngineShutdown }, nil))
 	// Stop the ticker.
 	if cli.opts.Ticker {
-		cli.el.engine.cancelTicker()
+		cli.el.engine.ticker.cancel()
 	}
-	if cli.logFlush != nil {
-		err = cli.logFlush()
-	}
+	_ = cli.el.engine.workerPool.Wait()
+	logging.Error(cli.el.poller.Close())
+	cli.el.eventHandler.OnShutdown(Engine{})
 	logging.Cleanup()
 	return
 }
 
 // Dial is like net.Dial().
 func (cli *Client) Dial(network, address string) (Conn, error) {
+	return cli.DialContext(network, address, nil)
+}
+
+// DialContext is like Dial but also accepts an empty interface ctx that can be obtained later via Conn.Context.
+func (cli *Client) DialContext(network, address string, ctx interface{}) (Conn, error) {
 	c, err := net.Dial(network, address)
 	if err != nil {
 		return nil, err
 	}
-	return cli.Enroll(c)
+	return cli.EnrollContext(c, ctx)
 }
 
 // Enroll converts a net.Conn to gnet.Conn and then adds it into Client.
 func (cli *Client) Enroll(c net.Conn) (Conn, error) {
+	return cli.EnrollContext(c, nil)
+}
+
+// EnrollContext is like Enroll but also accepts an empty interface ctx that can be obtained later via Conn.Context.
+func (cli *Client) EnrollContext(c net.Conn, ctx interface{}) (Conn, error) {
 	defer c.Close()
 
 	sc, ok := c.(syscall.Conn)
@@ -180,7 +195,7 @@ func (cli *Client) Enroll(c net.Conn) (Conn, error) {
 
 	var (
 		sockAddr unix.Sockaddr
-		gc       Conn
+		gc       *conn
 	)
 	switch c.(type) {
 	case *net.UnixConn:
@@ -211,12 +226,20 @@ func (cli *Client) Enroll(c net.Conn) (Conn, error) {
 		}
 		gc = newUDPConn(dupFD, cli.el, c.LocalAddr(), sockAddr, true)
 	default:
-		return nil, gerrors.ErrUnsupportedProtocol
+		return nil, errorx.ErrUnsupportedProtocol
 	}
-	err = cli.el.poller.UrgentTrigger(cli.el.register, gc)
+	gc.ctx = ctx
+
+	connOpened := make(chan struct{})
+	ccb := &connWithCallback{c: gc, cb: func() {
+		close(connOpened)
+	}}
+	err = cli.el.poller.Trigger(queue.HighPriority, cli.el.register, ccb)
 	if err != nil {
 		gc.Close()
 		return nil, err
 	}
+
+	<-connOpened
 	return gc, nil
 }
