@@ -82,6 +82,12 @@ type Poller struct {
 	fd int
 }
 
+const (
+	readEvents      = unix.EPOLLPRI | unix.EPOLLIN
+	writeEvents     = unix.EPOLLOUT
+	readWriteEvents = readEvents | writeEvents
+)
+
 func NewPoller() (poller *Poller, err error) {
 	poller = new(Poller)
 	if poller.fd, err = unix.EpollCreate1(unix.EPOLL_CLOEXEC); err != nil {

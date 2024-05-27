@@ -43,7 +43,7 @@ func CreateService(proto string, config ...ConfigFunc) (*Service, error) {
 		return nil, fmt.Errorf("ReactorNum MUST be greater than 0, got %d", inst.config.ReactorNum)
 	}
 
-	inst.reactor = make([]*_Reactor, inst.config.ReactorNum)
+	inst.reactor = make([]*Reactor, inst.config.ReactorNum)
 	for i := 0; i < inst.config.ReactorNum; i++ {
 		inst.reactor[i], err = newReactor(network, addr, &inst.config)
 		if err != nil {
@@ -107,7 +107,7 @@ type Service struct {
 	chErr  chan error
 	config Config
 
-	reactor []*_Reactor
+	reactor []*Reactor
 }
 
 func (inst *Service) Run(ctx context.Context) <-chan error {

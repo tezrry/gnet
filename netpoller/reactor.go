@@ -10,7 +10,7 @@ import (
 	"github.com/panjf2000/gnet/v2/netpoller/internal/sys/socket"
 )
 
-type _Reactor struct {
+type Reactor struct {
 	ctx     context.Context
 	config  *Config
 	network Network
@@ -21,8 +21,8 @@ type _Reactor struct {
 	poller  *evtpoll.Poller
 }
 
-func newReactor(network Network, addr net.Addr, config *Config) (*_Reactor, error) {
-	inst := &_Reactor{
+func newReactor(network Network, addr net.Addr, config *Config) (*Reactor, error) {
+	inst := &Reactor{
 		config:  config,
 		network: network,
 		netAddr: addr,
@@ -49,7 +49,7 @@ type _Event struct {
 	data []byte
 }
 
-func (inst *_Reactor) run(ctx context.Context, chErr <-chan error) {
+func (inst *Reactor) run(ctx context.Context, chErr <-chan error) {
 	sockOpts := make([]socket.Option, 0, 8)
 	if inst.config.SocketSendBuffer > 0 {
 		sockOpts = append(sockOpts, socket.Option{

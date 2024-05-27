@@ -1,4 +1,4 @@
-//go:build freebsd || dragonfly || darwin
+//go:build freebsd || dragonfly || netbsd || openbsd || darwin
 
 package evtpoll
 
@@ -107,12 +107,12 @@ func (p *Poller) Close() error {
 }
 
 // AddRead registers the given file-descriptor with readable event to the poller.
-func (p *Poller) AddRead(pa *PollAttachment) error {
+func (p *Poller) AddRead(fd int, data unsafe.Pointer) error {
 	var evs [1]unix.Kevent_t
-	evs[0].Ident = uint64(pa.FD)
+	evs[0].Ident = uint64(fd)
 	evs[0].Flags = unix.EV_ADD
 	evs[0].Filter = unix.EVFILT_READ
-	evs[0].Udata = (*byte)(unsafe.Pointer(pa))
+	evs[0].Udata = (*byte)(data)
 	_, err := unix.Kevent(p.efd, evs[:], nil, nil)
 	return os.NewSyscallError("kevent add", err)
 }
